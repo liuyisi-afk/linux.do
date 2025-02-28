@@ -26,10 +26,15 @@ class LinuxDoBrowser:
                 self.pw = sync_playwright().start()
                 self.browser = self.pw.firefox.launch(headless=True)
                 self.context = self.browser.new_context()
-                if self.context.is_closed():
-                    raise RuntimeError("Browser context is closed after creation")
                 self.page = self.context.new_page()
                 self.page.goto(HOME_URL)
+
+                # 检查浏览器上下文是否关闭
+                if hasattr(self.context, 'closed') and self.context.closed:
+                    print("Browser context is closed")
+                else:
+                    print("Browser context is open")
+
                 break
             except Exception as e:
                 print(f"Attempt {attempt + 1} failed: {e}")
