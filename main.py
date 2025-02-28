@@ -3,7 +3,7 @@ import time
 import random
 import requests
 from tabulate import tabulate
-from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
 # 设置 PushPlus 的 Token 和发送请求的 URL
 PUSHPLUS_TOKEN = os.environ.get("PUSHTOKEN")
@@ -15,100 +15,142 @@ PASSWORD = os.environ.get("PASSWORD")
 
 HOME_URL = "https://linux.do/"
 
-class LinuxDoScraper:
-    def __init__(self) -> None:
-        self.session = requests.Session()
+class LinuxDoBrowser:
+    def __init__(self, retries=3) -> None:
+        self.retries = retries
+        self.initialize_browser()
+
+    def initialize_browser(self):
+        for attempt in range(self.retries):
+            try:
+                print(f"Attempt {attempt + 1} to initialize browser...")
+                self.pw = sync_playwright().start()
+                self.browser = self.pw.firefox.launch(headless=True)
+                self.context = self.browser.new_context()
+                self.page = self.context.new_page()
+                self.page.goto(HOME_URL)
+                print("Browser initialized successfully")
+                break
+            except Exception as e:
+                print(f"Attempt {attempt + 1} failed: {e}")
+                if attempt == self.retries - 1:
+                    raise
+                self.close_resources()
+                time.sleep(5)  # 等待一段时间后重试
+
+    def close_resources(self):
+        if hasattr(self, 'context'):
+            self.context.close()
+        if hasattr(self, 'browser'):
+            self.browser.close()
+        if hasattr(self, 'pw'):
+            self.pw.stop()
 
     def login(self):
         try:
             print("Attempting to log in...")
-            login_url = HOME_URL + "login"
-            response = self.session.get(login_url)
-            soup = BeautifulSoup(response.text, "html.parser")
-            csrf_token = soup.find("meta", attrs={"name": "csrf-token"})["content"]
-
-            login_data = {
-                "username": USERNAME,
-                "password": PASSWORD,
-                "authenticity_token": csrf_token
-            }
-            response = self.session.post(login_url, data=login_data)
-            if response.status_code == 200:
-                print("Login success")
-                return True
-            else:
+            self.page.click(".login-button .d-button-label")
+            time.sleep(2)
+            self.page.fill("#login-account-name", USERNAME)
+            time.sleep(2)
+            self.page.fill("#login-account-password", PASSWORD)
+            time.sleep(2)
+            self.page.click("#login-button")
+            time.sleep(10)
+            user_ele = self.page.query_selector("#current-user")
+            if not user_ele:
                 print("Login failed")
                 return False
+            else:
+                print("Login success")
+                return True
         except Exception as e:
             print(f"Login failed with error: {e}")
             return False
 
-    def scrape_topics(self):
+    def scroll_down(self):
+        print("Scrolling down...")
+        self.page.evaluate("window.scrollBy(0, document.body.scrollHeight)")
+        time.sleep(2)  # 等待加载新内容
+
+    def click_topic(self):
         max_browse_count = 50  # 减少浏览数量以降低资源消耗
+        browsed_topics = []  # 存储浏览的帖子
         total_count = 0
 
         while total_count < max_browse_count:
             try:
                 print(f"Loading topic list...")
-                response = self.session.get(HOME_URL)
-                soup = BeautifulSoup(response.text, "html.parser")
-                topics = soup.select("#list-area .title")
+                time.sleep(5)
+                topics = self.page.query_selector_all("#list-area .title")
 
                 if not topics:
                     print("No topics found, please check the selector or page load.")
                     break
 
-                for topic in topics:
+                # 排除已经浏览过的帖子
+                new_topics = [t for t in topics if t not in browsed_topics]
+                browsed_topics.extend(new_topics)
+
+                if not new_topics:
+                    print("No more topics loaded.")
+                    break
+
+                for topic in new_topics:
                     if total_count >= max_browse_count:
                         break
 
                     try:
                         print(f"Browsing topic {total_count + 1}...")
-                        topic_url = HOME_URL + topic["href"]
-                        response = self.session.get(topic_url)
+                        page = self.context.new_page()
+                        page.goto(HOME_URL + topic.get_attribute("href"))
                         time.sleep(3)
                         
                         if random.random() < 0.02:  # 保持 2% 点赞几率
                             print("Attempting to like...")
-                            self.click_like(topic_url)
+                            self.click_like(page)
 
                         total_count += 1
                         time.sleep(3)
                     except Exception as e:
                         print(f"Error browsing topic: {e}")
+                    finally:
+                        if not page.is_closed():
+                            page.close()
 
                 print(f"Browsed {total_count} topics")
+                self.scroll_down()
+
             except Exception as e:
                 print(f"Error loading topic list: {e}")
+                # 重新初始化浏览器上下文
+                self.close_resources()
+                self.initialize_browser()
 
         print(f"Total topics browsed: {total_count}")
 
-    def click_like(self, topic_url):
+    def click_like(self, page):
         try:
-            like_url = topic_url + "/like"
-            response = self.session.post(like_url)
-            if response.status_code == 200:
-                print("Like success")
-            else:
-                print("Like failed")
+            page.locator(".discourse-reactions-reaction-button").first.click()
+            print("Like success")
         except Exception as e:
             print(f"Like failed: {e}")
 
     def print_connect_info(self):
         try:
             print("Fetching connection info...")
-            response = self.session.get("https://connect.linux.do/")
-            soup = BeautifulSoup(response.text, "html.parser")
-            rows = soup.select("table tr")
+            page = self.context.new_page()
+            page.goto("https://connect.linux.do/")
+            rows = page.query_selector_all("table tr")
 
             info = []
 
             for row in rows:
-                cells = row.select("td")
+                cells = row.query_selector_all("td")
                 if len(cells) >= 3:
-                    project = cells[0].text.strip()
-                    current = cells[1].text.strip()
-                    requirement = cells[2].text.strip()
+                    project = cells[0].text_content().strip()
+                    current = cells[1].text_content().strip()
+                    requirement = cells[2].text_content().strip()
                     info.append([project, current, requirement])
 
             # 使用 HTML 表格格式化数据，包含标题
@@ -137,20 +179,30 @@ class LinuxDoScraper:
             print("Push result:", response_pushplus.text)
         except Exception as e:
             print(f"Error fetching connection info: {e}")
+        finally:
+            if not page.is_closed():
+                page.close()
 
     def run(self):
         try:
             if not self.login():
                 return
-            self.scrape_topics()
+            self.click_topic()
             self.print_connect_info()
         except Exception as e:
             print(f"Error during execution: {e}")
+            # 重新初始化浏览器
+            self.close_resources()
+            self.initialize_browser()
+            self.run()
+        finally:
+            # 确保资源释放
+            self.close_resources()
 
 if __name__ == "__main__":
     if not USERNAME or not PASSWORD:
         print("Please set USERNAME and PASSWORD")
         exit(1)
     
-    scraper = LinuxDoScraper()
-    scraper.run()
+    l = LinuxDoBrowser()
+    l.run()
