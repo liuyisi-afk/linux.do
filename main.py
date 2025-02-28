@@ -25,7 +25,14 @@ class LinuxDoBrowser:
             try:
                 print(f"Attempt {attempt + 1} to initialize browser...")
                 self.pw = sync_playwright().start()
-                self.browser = self.pw.firefox.launch(headless=True)
+                self.browser = self.pw.firefox.launch(
+                    headless=True,
+                    args=[
+                        "--disable-gpu",  # 禁用 GPU 加速
+                        "--no-sandbox",  # 禁用沙盒模式
+                        "--disable-dev-shm-usage",  # 禁用共享内存
+                    ]
+                )
                 self.context = self.browser.new_context()
                 self.page = self.context.new_page()
                 self.page.goto(HOME_URL)
@@ -102,6 +109,12 @@ class LinuxDoBrowser:
 
                     try:
                         print(f"Browsing topic {total_count + 1}...")
+                        # 检查上下文是否有效
+                        if self.context.is_closed():
+                            print("Browser context is closed, reinitializing...")
+                            self.close_resources()
+                            self.initialize_browser()
+
                         page = self.context.new_page()
                         page.goto(HOME_URL + topic.get_attribute("href"))
                         time.sleep(3)
