@@ -23,6 +23,11 @@ jobs:
           pip install playwright==1.43.0 wcwidth==0.2.13 tabulate==0.9.0 requests==2.32.3 markdown==3.6
           playwright install
 
+      - name: Install Firefox (for Playwright)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y firefox
+
       - name: Run script
         env:
           USERNAME: ${{ secrets.USERNAME }}
